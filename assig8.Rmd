@@ -1,0 +1,182 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "YMGoh"
+date: "November 13, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Overview
+
+This report describes the approach using data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to predict the manner in which they did the exercise. The data for this project has been graciously provided by Velloso et al.,(2013) at http://groupware.les.inf.puc-rio.br/har. see section on the Weight Lifting Exercise Dataset, and based on the following publication :
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. "Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13)". Stuttgart, Germany: ACM SIGCHI, 2013. 
+
+The dataset was obtained by asking the participants to perform barbell lifts correctly and incorrectly in 5 different ways. The five ways are, (Class A) exactly according to the specification, (Class B) throwing the elbows to the front, (Class C) lifting the dumbbell only halfway, (Class D) lowering the dumbbell only halfway and (Class E) throwing the hips to the front. Only Class A corresponds to the correct performance.According to the original authors, participants were supervised by an experienced weight lifter to make sure the execution complied to the manner they were supposed to simulate. The exercises were performed by six male participants aged between 20-28 years, with little weight lifting experience. The orignal authors also made sure that all participants could easily simulate the mistakes in a safe and controlled manner by using a relatively light dumbbell (1.25kg).
+
+This report describes how the prediction model was built, cross validated, and then checked for their respective sample errors. These are then used to arrive at a decision to justify why a prediction approach is the best. Subsequently, the prediction model was also used to predict 20 different test cases as instructed.
+
+
+## Step I : Preparing the environment and loading data
+
+The necessary packages and libraries are first loaded
+
+```{R, prep_environment}
+library(caret); library(rattle); library(rpart); library(rpart.plot)
+library(randomForest); library(repmis)
+set.seed(100) # so that the results will be repeatable
+```
+
+The data was then loaded using the following code :
+
+```{r data_loading}
+# download data from the given URLs
+pmlTrain <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+pmlTest  <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+# reading and loading the datasets
+training <- read.csv(url(pmlTrain))
+testing  <- read.csv(url(pmlTest))
+
+# assigning the TRAINING data to training (70%) and testing sets (the remainder)
+inTrain  <- createDataPartition(training$classe, p=0.7, list=FALSE)
+TrainSet <- training[inTrain, ]
+TestSet  <- training[-inTrain, ]
+
+# checking the dim attributes of the created TrainSet and TestSet
+dim(TrainSet)
+dim(TestSet)
+```
+
+It is obvious that both the training set and testing set has 160 variables. Missing values (coded NA), Near Zero Variance (which will disrupt model construction), and variables pertaining to ID's will be excluded in Step II
+
+## Step II : Data cleaning 
+
+Removing Near Zero Variance values (using built-in function of caret), and checking dim attributes
+
+```{r rem_nzv}
+NZV <- nearZeroVar(TrainSet)
+TrainSet <- TrainSet[, -NZV]
+TestSet  <- TestSet[, -NZV]
+dim(TrainSet)
+dim(TestSet)
+```
+
+Removing missing values in both traning and test sets, and checking dim attributes
+
+```{r rem_NA}
+remNA    <- sapply(TrainSet, function(x) mean(is.na(x))) > 0.95
+TrainSet <- TrainSet[, remNA==FALSE]
+TestSet  <- TestSet[, remNA==FALSE]
+dim(TrainSet)
+dim(TestSet)
+
+```
+
+Removing the first 5 columns associated with identification variables and checked their respective dimensionalities.
+
+```{r rem_5_col}
+TrainSet <- TrainSet[, -(1:5)]
+TestSet  <- TestSet[, -(1:5)]
+dim(TrainSet)
+dim(TestSet)
+```
+
+After this stage, we will be working with only 54 variables of 13737 observations in TrainSet, and 5885 observations in TestSet.
+
+## Step III : Building prediction models
+
+Data from step II will be used to build prediction models using firstly Decision Tree, Random Forest and finally Generalised Boosted Model.
+
+## Step III(A) : Building model using Decision Tree
+
+```{R decision_tree}
+set.seed(100)
+dt <- rpart(classe ~ ., data=TrainSet, method="class")
+fancyRpartPlot(dt)
+```
+
+Running prediction using the test set. 
+
+```{R decision_tree_test}
+# prediction on Test dataset
+predictDT <- predict(dt, newdata=TestSet, type="class")
+confDT <- confusionMatrix(predictDT, TestSet$classe)
+confDT
+```
+
+It is clear that the model based on Decision Tree has an accuracy of 0.7358 
+
+## Step III(B):Building model using Random Forest
+
+The classification tree was constructed using k=3 fold crossvalidation to save time. The default k=10 would potentially take much longer time.
+
+```{R Random_Forest_Model}
+set.seed(100)
+# NOTE ! Even cv=3 may take up to 15 minutes on (slower) computers !
+tRF <- trainControl(method="cv", number=3, verboseIter=FALSE) 
+fitRF <- train(classe ~ ., data=TrainSet, method="rf",
+                          trControl=tRF)
+fitRF$finalModel
+
+```
+
+Running prediction using the test set. 
+
+```{R Random_Forest_test}
+predictRF <- predict(fitRF, newdata=TestSet)
+confRF <- confusionMatrix(predictRF, TestSet$classe)
+confRF
+
+```
+
+It is clear that the model based on Random Forest has an accuracy of 0.9976, which is the best so far !
+
+## Step III(C):Building model using Generalised Boosted Model
+
+```{R g_b_m}
+set.seed(100)
+learnGBM <- trainControl(method = "repeatedcv", number = 5, repeats = 1)
+FitGBM  <- train(classe ~ ., data=TrainSet, method = "gbm",
+                    trControl = learnGBM, verbose = FALSE)
+FitGBM$finalModel
+
+```
+
+Improvements in the accuracy versus the number of boosting iterations can be clearly seen in the following graph
+
+```{R accu_gbm}
+plot(FitGBM, ylim=c(0.9, 1))
+```
+
+Running prediction using the test set. 
+
+```{R g_b_m_test}
+predictGBM <- predict(FitGBM, newdata=TestSet)
+confGBM <- confusionMatrix(predictGBM, TestSet$classe)
+confGBM
+
+```
+
+It is clear that the model based on Generalised Boosted Model has an accuracy of 0.9856. This is better than decision tree-based model, but no as good as models built using random forest.
+
+## STEP IV : Determining the best model
+
+Based on the above, prediction models constructed using decision tree yielded an accuracy of 73.58 %, random forest yielded 99.76 % accuracy, where as the model constructed using the Generalised Boosted Model approach had 98.56% accuracy
+
+Thus it is clear that the Random Forest model is the best model as it has the highest accuracy, and the lowest expected out of sample error at 0.24 % only.
+
+## STEP V : Using the best model to answer the 20 quiz questions
+
+The codes and output are as follows :
+
+```{R model_for_quiz}
+predictQuiz <- predict(fitRF, newdata=testing)
+predictQuiz
+```
+
+END OF ASSIGNMENT
+
